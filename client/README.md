@@ -1,32 +1,21 @@
-# Turborepo react-native starter
+# Next.js template
 
-This is a community-maintained example. If you experience a problem, please submit a pull request with a fix. GitHub Issues will be closed.
+This is a Next.js template with shadcn/ui.
 
-## Using this example
+## Adding components
 
-Run the following command:
+To add components to your app, run the following command:
 
-```sh
-npx create-turbo@latest -e with-react-native-web
+```bash
+npx shadcn@latest add button
 ```
 
-## What's inside?
+This will place the ui components in the `components` directory.
 
-This Turborepo includes the following packages/apps:
+## Using components
 
-### Apps and Packages
+To use the components in your app, import them as follows:
 
-- `native`: a [react-native](https://reactnative.dev/) app built with [expo](https://docs.expo.dev/)
-- `web`: a [Next.js](https://nextjs.org/) app built with [react-native-web](https://necolas.github.io/react-native-web/)
-- `@repo/ui`: a stub [react-native](https://reactnative.dev/) component library shared by both `web` and `native` applications
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [Expo](https://docs.expo.dev/) for native development
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [Prettier](https://prettier.io) for code formatting
+```tsx
+import { Button } from "@/components/ui/button";
+```

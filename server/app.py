@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import pickle
 import threading
 import time
@@ -74,16 +75,20 @@ class SessionResponse(BaseModel):
 class SessionState:
     buffer: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     sequence: deque[list[float]] = field(default_factory=lambda: deque(maxlen=30))
+    motion_probs: deque[list[float]] = field(default_factory=lambda: deque(maxlen=5))
     sentence: str = ""
     prev_char: str = ""
     last_added_time: float = 0.0
+    prev_motion_features: list[float] | None = None
 
     def clear_all(self) -> None:
         self.buffer.clear()
         self.sequence.clear()
+        self.motion_probs.clear()
         self.sentence = ""
         self.prev_char = ""
         self.last_added_time = 0.0
+        self.prev_motion_features = None
 
 
 class HybridPredictor:
@@ -102,7 +107,7 @@ class HybridPredictor:
         self.static_model = static_blob["model"] if isinstance(static_blob, dict) else static_blob
         self.motion_model = load_legacy_motion_model(motion_path)
 
-        self.actions = self._load_actions(motion_data_path)
+        self.actions, self.motion_actions_source = self._load_actions(motion_data_path)
         self.actions = self._align_actions_with_model(self.actions)
 
         self.mp_hands = mp.solutions.hands
@@ -120,14 +125,20 @@ class HybridPredictor:
         self._motion_feature_size = int(self.motion_model.input_shape[-1])
         self._warm_up_models()
 
-    def _load_actions(self, motion_data_path: Path) -> list[str]:
+    def _load_actions(self, motion_data_path: Path) -> tuple[list[str], str]:
+        env_actions = os.getenv("MOTION_ACTIONS", "").strip()
+        if env_actions:
+            parsed = [action.strip() for action in env_actions.split(",") if action.strip()]
+            if parsed:
+                return parsed, "env"
+
         if motion_data_path.exists():
             data = pickle.load(motion_data_path.open("rb"))
             if isinstance(data, dict) and "actions" in data:
-                return [str(a) for a in data["actions"]]
+                return [str(a) for a in data["actions"]], "motion_data"
 
         # Fallback to actions used in your data collection notebook.
-        return ["HELLO", "YES", "NO", "THANKS", "OK"]
+        return ["HELLO", "YES", "NO", "THANKS", "OK"], "fallback"
 
     def _align_actions_with_model(self, actions: list[str]) -> list[str]:
         output_shape = self.motion_model.output_shape
@@ -230,7 +241,10 @@ class HybridPredictor:
         if features is None:
             if request.mode == "motion":
                 session.buffer.clear()
-                session.sequence.append([0.0] * self._motion_feature_size)
+                if session.prev_motion_features is not None:
+                    session.sequence.append(session.prev_motion_features)
+                else:
+                    session.sequence.append([0.0] * self._motion_feature_size)
 
             return PredictResponse(
                 session_id=request.session_id,
@@ -252,6 +266,8 @@ class HybridPredictor:
 
         if request.mode == "static":
             session.sequence.clear()
+            session.motion_probs.clear()
+            session.prev_motion_features = None
             features = self._normalize_feature_length(features, self._static_feature_size)
             raw_prediction = self.static_model.predict([features])[0]
             current_prediction = str(raw_prediction)
@@ -278,6 +294,7 @@ class HybridPredictor:
         else:
             session.buffer.clear()
             features = self._normalize_feature_length(features, self._motion_feature_size)
+            session.prev_motion_features = features
             session.sequence.append(features)
 
             if len(session.sequence) == session.sequence.maxlen:
@@ -286,11 +303,14 @@ class HybridPredictor:
                     np.expand_dims(sequence_np, axis=0),
                     verbose=0,
                 )[0]
-                action_idx = int(np.argmax(prediction_vector))
-                current_prediction = self.actions[action_idx]
-                confidence = float(prediction_vector[action_idx])
+                session.motion_probs.append(prediction_vector.tolist())
+                smooth_vector = np.mean(np.array(session.motion_probs, dtype=np.float32), axis=0)
 
-                if (current_time - session.last_added_time) > 1.0:
+                action_idx = int(np.argmax(smooth_vector))
+                current_prediction = self.actions[action_idx]
+                confidence = float(smooth_vector[action_idx])
+
+                if confidence >= 0.55 and (current_time - session.last_added_time) > 1.0:
                     if session.sentence and not session.sentence.endswith(" "):
                         session.sentence += " "
                     session.sentence += f"{current_prediction} "
@@ -336,6 +356,7 @@ class HybridPredictor:
             "modes": ["static", "motion"],
             "static_classes": static_classes,
             "motion_actions": self.actions,
+            "motion_actions_source": self.motion_actions_source,
             "buffer_size": 10,
             "sequence_length": 30,
             "cooldown_seconds": 1.0,

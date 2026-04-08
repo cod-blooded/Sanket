@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 
@@ -35,8 +35,10 @@ const HAND_CONNECTIONS: Array<[number, number]> = [
     [0, 17],
 ]
 
-const CAPTURE_WIDTH = 640
-const PREDICT_INTERVAL_MS = 220
+const STATIC_CAPTURE_WIDTH = 640
+const MOTION_CAPTURE_WIDTH = 420
+const STATIC_INTERVAL_MS = 220
+const MOTION_INTERVAL_MS = 120
 const PREDICT_TIMEOUT_MS = 8000
 
 const API_BASE =
@@ -72,7 +74,7 @@ function createSessionId() {
 }
 
 export default function Page() {
-    const sessionId = useMemo(() => createSessionId(), [])
+    const [sessionId, setSessionId] = useState<string | null>(null)
 
     const videoRef = useRef<HTMLVideoElement | null>(null)
     const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -91,6 +93,10 @@ export default function Page() {
     const [bufferProgress, setBufferProgress] = useState(0)
     const [sequenceProgress, setSequenceProgress] = useState(0)
     const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+    useEffect(() => {
+        setSessionId(createSessionId())
+    }, [])
 
     const checkHealth = useCallback(async () => {
         try {
@@ -162,6 +168,10 @@ export default function Page() {
 
     const sendControl = useCallback(
         async (action: "clear" | "backspace" | "delete_word" | "reset_session") => {
+            if (!sessionId) {
+                return
+            }
+
             try {
                 const response = await fetch(`${API_BASE}/control`, {
                     method: "POST",
@@ -182,6 +192,56 @@ export default function Page() {
         [sessionId]
     )
 
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null
+            if (
+                target &&
+                (target.tagName === "INPUT" ||
+                    target.tagName === "TEXTAREA" ||
+                    target.tagName === "SELECT" ||
+                    target.isContentEditable)
+            ) {
+                return
+            }
+
+            const key = event.key.toLowerCase()
+            if (key === "m") {
+                event.preventDefault()
+                setMode("motion")
+                return
+            }
+
+            if (key === "n") {
+                event.preventDefault()
+                setMode("static")
+                return
+            }
+
+            if (key === "c") {
+                event.preventDefault()
+                void sendControl("clear")
+                return
+            }
+
+            if (key === "b") {
+                event.preventDefault()
+                void sendControl("backspace")
+                return
+            }
+
+            if (key === "w") {
+                event.preventDefault()
+                void sendControl("delete_word")
+            }
+        }
+
+        window.addEventListener("keydown", onKeyDown)
+        return () => {
+            window.removeEventListener("keydown", onKeyDown)
+        }
+    }, [sendControl])
+
     const captureFrame = useCallback(() => {
         const video = videoRef.current
         const canvas = captureCanvasRef.current
@@ -197,7 +257,8 @@ export default function Page() {
             return null
         }
 
-        const targetWidth = Math.min(CAPTURE_WIDTH, width)
+        const preferredWidth = mode === "motion" ? MOTION_CAPTURE_WIDTH : STATIC_CAPTURE_WIDTH
+        const targetWidth = Math.min(preferredWidth, width)
         const targetHeight = Math.round((height / width) * targetWidth)
 
         canvas.width = targetWidth
@@ -208,9 +269,10 @@ export default function Page() {
             return null
         }
 
+        const quality = mode === "motion" ? 0.5 : 0.6
         context.drawImage(video, 0, 0, targetWidth, targetHeight)
-        return canvas.toDataURL("image/jpeg", 0.6)
-    }, [])
+        return canvas.toDataURL("image/jpeg", quality)
+    }, [mode])
 
     const drawLandmarks = useCallback((landmarks: LandmarkPoint[]) => {
         const video = videoRef.current
@@ -268,6 +330,10 @@ export default function Page() {
     }, [])
 
     const sendPrediction = useCallback(async () => {
+        if (!sessionId) {
+            return
+        }
+
         const imageData = captureFrame()
         if (!imageData) {
             return
@@ -328,13 +394,13 @@ export default function Page() {
             void sendPrediction().finally(() => {
                 inFlightRef.current = false
             })
-        }, PREDICT_INTERVAL_MS)
+        }, mode === "motion" ? MOTION_INTERVAL_MS : STATIC_INTERVAL_MS)
 
         return () => {
             window.clearInterval(timer)
             inFlightRef.current = false
         }
-    }, [isCameraOn, sendPrediction])
+    }, [isCameraOn, mode, sendPrediction])
 
     const confidenceText =
         confidence === null ? "-" : `${Math.max(0, Math.min(100, confidence * 100)).toFixed(1)}%`
@@ -359,7 +425,7 @@ export default function Page() {
                         >
                             API: {serverOnline === null ? "Checking..." : serverOnline ? "Online" : "Offline"}
                         </span>
-                        <span className="status-chip">Session: {sessionId.slice(0, 8)}</span>
+                        <span className="status-chip">Session: {sessionId ? sessionId.slice(0, 8) : "--------"}</span>
                         <span className="status-chip">Frame Tx: {isSending ? "Running" : "Idle"}</span>
                     </div>
                 </header>
@@ -405,13 +471,13 @@ export default function Page() {
                                 variant={mode === "static" ? "default" : "outline"}
                                 onClick={() => setMode("static")}
                             >
-                                Static Mode
+                                Static Mode (N)
                             </Button>
                             <Button
                                 variant={mode === "motion" ? "default" : "outline"}
                                 onClick={() => setMode("motion")}
                             >
-                                Motion Mode
+                                Motion Mode (M)
                             </Button>
                         </div>
                         <p className="mt-3 text-xs text-slate-600 md:text-sm">
@@ -454,13 +520,13 @@ export default function Page() {
 
                         <div className="mt-4 flex flex-wrap gap-2">
                             <Button variant="outline" onClick={() => void sendControl("clear")}>
-                                Clear
+                                Clear (C)
                             </Button>
                             <Button variant="outline" onClick={() => void sendControl("backspace")}>
-                                Backspace
+                                Backspace (B)
                             </Button>
                             <Button variant="outline" onClick={() => void sendControl("delete_word")}>
-                                Delete Word
+                                Delete Word (W)
                             </Button>
                         </div>
 

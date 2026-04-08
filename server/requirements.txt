@@ -1,0 +1,17 @@
+fastapi==0.116.2
+uvicorn[standard]==0.35.0
+
+# Verified compatible ML stack for this project on Python 3.12.
+numpy==1.26.4
+protobuf==4.25.9
+tensorflow==2.16.2
+mediapipe==0.10.14
+scikit-learn==1.5.2
+
+# Keep OpenCV aligned with NumPy 1.26.x and MediaPipe runtime.
+opencv-contrib-python==4.10.0.84
+opencv-python-headless==4.10.0.84
+
+# MediaPipe pulls JAX; pin to versions compatible with TensorFlow's ml-dtypes.
+jax==0.4.30
+jaxlib==0.4.30

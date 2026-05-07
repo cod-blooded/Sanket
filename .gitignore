@@ -2,3 +2,4 @@
 server/.venv/
 **/__pycache__/
 *.pyc
+VIVA_GUIDE_FRAME_CAPTURE_FEATURE_TRACKING.md

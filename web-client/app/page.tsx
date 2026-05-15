@@ -3,9 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
     ArrowTurnBackwardIcon,
+    BookOpen02Icon,
     CameraVideoIcon,
+    Cancel01Icon,
     Delete02Icon,
+    HelpCircleIcon,
     KeyboardIcon,
+    Link02Icon,
     MaximizeScreenIcon,
     MinimizeScreenIcon,
     PlayIcon,
@@ -81,6 +85,21 @@ const BOOTSTRAP_DELAY_MS = 2600
 const API_BASE =
     process.env.NEXT_PUBLIC_INFERENCE_API_URL?.replace(/\/$/, "") ??
     "http://127.0.0.1:8000"
+
+const HELP_LINKS = [
+    {
+        label: "Sign Language dictionary",
+        href: "https://indiansignlanguage.org/dictionary/",
+    },
+    {
+        label: "Resources",
+        href: "https://islrtc.nic.in/",
+    },
+    {
+        label: "Backend health",
+        href: `${API_BASE}/health`,
+    },
+]
 
 const glassSurface =
     "border border-white/15 bg-[rgb(5_12_23_/_50%)] shadow-[0_1rem_2.5rem_rgb(0_0_0_/_24%)] backdrop-blur-[16px]"
@@ -179,10 +198,11 @@ export default function Page() {
     const [isCameraOn, setIsCameraOn] = useState(false)
     const [isDetecting, setIsDetecting] = useState(false)
     const [isFullscreen, setIsFullscreen] = useState(false)
+    const [isHelpOpen, setIsHelpOpen] = useState(false)
     const [serverOnline, setServerOnline] = useState<boolean | null>(null)
 
     const [handDetected, setHandDetected] = useState(false)
-    const [handWakeKey, setHandWakeKey] = useState(0)
+    const [, setHandWakeKey] = useState(0)
     const [currentPrediction, setCurrentPrediction] = useState("-")
     const [confidence, setConfidence] = useState<number | null>(null)
     const [sentence, setSentence] = useState("")
@@ -463,6 +483,12 @@ export default function Page() {
             }
 
             const key = event.key.toLowerCase()
+            if (key === "escape" && isHelpOpen) {
+                event.preventDefault()
+                setIsHelpOpen(false)
+                return
+            }
+
             if (key === " " || key === "enter") {
                 event.preventDefault()
                 void toggleDetection()
@@ -502,6 +528,12 @@ export default function Page() {
             if (key === "w") {
                 event.preventDefault()
                 void sendControl("delete_word")
+                return
+            }
+
+            if (key === "s") {
+                event.preventDefault()
+                speakTranscript()
             }
         }
 
@@ -509,7 +541,7 @@ export default function Page() {
         return () => {
             window.removeEventListener("keydown", onKeyDown)
         }
-    }, [changeMode, sendControl, toggleDetection, toggleFullscreen])
+    }, [changeMode, isHelpOpen, sendControl, speakTranscript, toggleDetection, toggleFullscreen])
 
     const captureFrame = useCallback(() => {
         const video = videoRef.current
@@ -839,7 +871,7 @@ export default function Page() {
                         </span>
                         <span className={cn(livePillClass, "max-[640px]:hidden")}>
                             <HugeiconsIcon icon={KeyboardIcon} size={16} />
-                            Space start, F fullscreen
+                            Space start, S speak, F fullscreen
                         </span>
                         {isDetecting && (
                             <div
@@ -912,7 +944,103 @@ export default function Page() {
                                 size={21}
                             />
                         </button>
+                        <button
+                            className={cn(
+                                glassSurface,
+                                "inline-grid size-[2.4rem] cursor-pointer place-items-center rounded-full border-[rgb(36_214_190_/_28%)] bg-[rgb(6_20_32_/_68%)] text-[rgb(231_255_251)] transition-[transform,background-color] duration-200 hover:-translate-y-px"
+                            )}
+                            onClick={() => setIsHelpOpen(true)}
+                            type="button"
+                            aria-label="Open help book"
+                            title="Open help book"
+                        >
+                            <HugeiconsIcon icon={HelpCircleIcon} size={21} />
+                        </button>
                     </div>
+                </div>
+
+                <div
+                    className={cn(
+                        "absolute inset-0 z-[30] transition-opacity duration-300",
+                        isHelpOpen
+                            ? "pointer-events-auto opacity-100"
+                            : "pointer-events-none opacity-0"
+                    )}
+                    aria-hidden={!isHelpOpen}
+                >
+                    <button
+                        className="absolute inset-0 cursor-default border-0 bg-[rgb(0_0_0_/_42%)]"
+                        onClick={() => setIsHelpOpen(false)}
+                        type="button"
+                        aria-label="Close help book"
+                    />
+                    <aside
+                        className={cn(
+                            glassSurface,
+                            "absolute top-0 right-0 grid h-full w-[min(28rem,100vw)] grid-rows-[auto_1fr] overflow-hidden rounded-l-[1rem] border-y-0 border-r-0 bg-[rgb(5_12_23_/_88%)] shadow-[0_0_4rem_rgb(0_0_0_/_42%)] transition-transform duration-300 ease-out max-[640px]:w-[min(24rem,92vw)]",
+                            isHelpOpen ? "translate-x-0" : "translate-x-full"
+                        )}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Help book"
+                    >
+                        <div className="flex items-center justify-between gap-3 border-b border-white/12 px-5 py-4">
+                            <div className="flex min-w-0 items-center gap-2">
+                                <span className="grid size-10 shrink-0 place-items-center rounded-full bg-[rgb(36_214_190_/_14%)] text-[rgb(36_214_190)]">
+                                    <HugeiconsIcon icon={BookOpen02Icon} size={22} />
+                                </span>
+                                <div className="min-w-0">
+                                    <p className="m-0 text-[0.72rem] font-black tracking-normal text-[rgb(177_197_216)] uppercase">
+                                        Quick reference
+                                    </p>
+                                    <h2 className="m-0 text-[1.18rem] leading-tight font-black text-white">
+                                        Help book
+                                    </h2>
+                                </div>
+                            </div>
+                            <button
+                                className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border border-white/14 bg-white/8 text-white transition-colors hover:bg-white/14"
+                                onClick={() => setIsHelpOpen(false)}
+                                type="button"
+                                aria-label="Close help book"
+                                title="Close help book"
+                            >
+                                <HugeiconsIcon icon={Cancel01Icon} size={20} />
+                            </button>
+                        </div>
+
+                        <div className="grid min-h-0 gap-5 overflow-y-auto px-5 py-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                            <figure className="m-0 overflow-hidden rounded-[0.65rem] border border-white/12 bg-white">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                    className="block h-auto w-full"
+                                    src="/sign-reference.jpeg"
+                                    alt="Sign alphabet and number reference chart"
+                                />
+                            </figure>
+
+                            <div className="grid gap-2">
+                                {HELP_LINKS.map((link) => (
+                                    <a
+                                        key={link.href}
+                                        className="flex min-h-12 items-center justify-between gap-3 rounded-[0.65rem] border border-white/12 bg-white/8 px-3 py-2 text-[0.92rem] font-extrabold text-[rgb(231_255_251)] no-underline transition-colors hover:bg-white/14"
+                                        href={link.href}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                    >
+                                        <span className="min-w-0 [overflow-wrap:anywhere]">
+                                            {link.label}
+                                        </span>
+                                        <HugeiconsIcon
+                                            icon={Link02Icon}
+                                            size={18}
+                                            className="shrink-0"
+                                        />
+                                    </a>
+                                ))}
+                            </div>
+                        </div>
+                    </aside>
                 </div>
 
 

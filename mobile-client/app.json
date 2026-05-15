@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Sanket",
+    "slug": "sanket-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/sanket-app-icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/sanket-splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#040d17"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/sanket-splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#040d17"
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow mobile-client to capture sign language frames for live inference."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/sanket-adaptive-foreground.png",
+        "backgroundColor": "#040d17"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/sanket-favicon.png"
+    }
+  }
+}

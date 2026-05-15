@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-    Activity03Icon,
     ArrowTurnBackwardIcon,
     CameraVideoIcon,
     Delete02Icon,
@@ -12,6 +11,7 @@ import {
     PlayIcon,
     ServerStack03Icon,
     VideoOffIcon,
+    VolumeHighIcon,
     WasteIcon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -133,6 +133,34 @@ function clampPercent(value: number) {
     return Math.max(0, Math.min(100, value))
 }
 
+function pickHumanVoice(voices: SpeechSynthesisVoice[]) {
+    const englishVoices = voices.filter((voice) =>
+        voice.lang.toLowerCase().startsWith("en")
+    )
+    const candidates = englishVoices.length ? englishVoices : voices
+    const preferredNameParts = [
+        "natural",
+        "online",
+        "aria",
+        "jenny",
+        "guy",
+        "sonia",
+        "google",
+        "microsoft",
+    ]
+
+    return (
+        candidates.find((voice) =>
+            preferredNameParts.some((part) =>
+                voice.name.toLowerCase().includes(part)
+            )
+        ) ??
+        candidates.find((voice) => voice.localService) ??
+        candidates[0] ??
+        null
+    )
+}
+
 export default function Page() {
     const [sessionId, setSessionId] = useState<string | null>(null)
 
@@ -144,6 +172,7 @@ export default function Page() {
     const shouldAutoScrollTranscriptRef = useRef(true)
     const inFlightRef = useRef(false)
     const handDetectedRef = useRef(false)
+    const speechVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
 
     const [isBootstrapping, setIsBootstrapping] = useState(true)
     const [mode, setMode] = useState<Mode>("static")
@@ -157,6 +186,8 @@ export default function Page() {
     const [currentPrediction, setCurrentPrediction] = useState("-")
     const [confidence, setConfidence] = useState<number | null>(null)
     const [sentence, setSentence] = useState("")
+    const [speechSupported, setSpeechSupported] = useState(false)
+    const [isSpeaking, setIsSpeaking] = useState(false)
     const [bufferProgress, setBufferProgress] = useState(0)
     const [sequenceProgress, setSequenceProgress] = useState(0)
     const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -172,6 +203,28 @@ export default function Page() {
 
         return () => {
             window.clearTimeout(timer)
+        }
+    }, [])
+
+    useEffect(() => {
+        if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+            setSpeechSupported(false)
+            return
+        }
+
+        const loadVoices = () => {
+            speechVoiceRef.current = pickHumanVoice(
+                window.speechSynthesis.getVoices()
+            )
+            setSpeechSupported(true)
+        }
+
+        loadVoices()
+        window.speechSynthesis.addEventListener("voiceschanged", loadVoices)
+
+        return () => {
+            window.speechSynthesis.cancel()
+            window.speechSynthesis.removeEventListener("voiceschanged", loadVoices)
         }
     }, [])
 
@@ -290,6 +343,42 @@ export default function Page() {
         },
         [sessionId]
     )
+
+    const speakTranscript = useCallback(() => {
+        const text = sentence.trim()
+
+        if (!speechSupported || typeof window === "undefined") {
+            setErrorMessage("Text-to-speech is not available in this browser.")
+            return
+        }
+
+        if (window.speechSynthesis.speaking) {
+            window.speechSynthesis.cancel()
+            setIsSpeaking(false)
+            return
+        }
+
+        if (!text) {
+            setErrorMessage("There is no transcription to read yet.")
+            return
+        }
+
+        setErrorMessage(null)
+        const utterance = new SpeechSynthesisUtterance(text)
+        utterance.voice = speechVoiceRef.current
+        utterance.rate = 0.92
+        utterance.pitch = 1
+        utterance.volume = 1
+        utterance.onstart = () => setIsSpeaking(true)
+        utterance.onend = () => setIsSpeaking(false)
+        utterance.onerror = () => {
+            setIsSpeaking(false)
+            setErrorMessage("Could not play the transcription voice.")
+        }
+
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(utterance)
+    }, [sentence, speechSupported])
 
     const resetLocalTracking = useCallback(() => {
         handDetectedRef.current = false
@@ -707,7 +796,6 @@ export default function Page() {
                     <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgb(36_214_190_/_18%),transparent_32%),linear-gradient(120deg,rgb(36_214_190_/_14%),transparent_24%,transparent_72%,rgb(255_205_77_/_12%))]" />
                     <div className="absolute inset-0 shadow-[inset_0_0_3rem_rgb(36_214_190_/_22%),inset_0_0_7rem_rgb(255_205_77_/_10%)]" />
                 </div>
-
                 {!isCameraOn && (
                     <div className="absolute top-1/2 left-1/2 z-[5] grid w-[min(25rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 justify-items-center gap-4 rounded-[1.1rem] border border-white/15 bg-[rgb(6_14_26_/_72%)] p-5 text-center shadow-[0_1.5rem_4rem_rgb(0_0_0_/_34%)] backdrop-blur-[18px]">
                         <span className="grid size-16 place-items-center rounded-full bg-[rgb(36_214_190_/_12%)] text-[rgb(36_214_190)]">
@@ -925,7 +1013,7 @@ export default function Page() {
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-[0.55rem] justify-self-start max-[640px]:grid max-[640px]:w-full max-[640px]:grid-cols-4 max-[640px]:gap-[0.42rem] max-[620px]:landscape:justify-self-end">
+                    <div className="flex flex-wrap items-center gap-[0.55rem] justify-self-start max-[640px]:grid max-[640px]:w-full max-[640px]:grid-cols-5 max-[640px]:gap-[0.42rem] max-[620px]:landscape:justify-self-end">
                         <button
                             className={cn(
                                 dockButtonClass,
@@ -941,6 +1029,30 @@ export default function Page() {
                                 size={18}
                             />
                             {isDetecting ? "Pause" : "Start"}
+                        </button>
+                        <button
+                            className={cn(
+                                dockButtonClass,
+                                isSpeaking
+                                    ? "border-[rgb(255_205_77_/_34%)] bg-[rgb(255_205_77_/_82%)] text-[rgb(4_13_23)]"
+                                    : "border-[rgb(36_214_190_/_28%)]",
+                                !isSpeaking &&
+                                    (!speechSupported || !sentence.trim()) &&
+                                    "cursor-not-allowed opacity-45 hover:translate-y-0"
+                            )}
+                            disabled={
+                                !isSpeaking && (!speechSupported || !sentence.trim())
+                            }
+                            onClick={speakTranscript}
+                            type="button"
+                            title={
+                                speechSupported
+                                    ? "Read transcription aloud"
+                                    : "Text-to-speech is unavailable"
+                            }
+                        >
+                            <HugeiconsIcon icon={VolumeHighIcon} size={18} />
+                            {isSpeaking ? "Stop" : "Speak"}
                         </button>
                         <button
                             className={dockButtonClass}

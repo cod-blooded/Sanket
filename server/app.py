@@ -20,6 +20,10 @@ from tensorflow.keras.layers import LSTM
 from tensorflow.keras.models import load_model
 
 Mode = Literal["static", "motion"]
+MOTION_CONFIDENCE_THRESHOLD = 0.6
+MOTION_STABLE_FRAMES = 3
+MOTION_BOOTSTRAP_FRAMES = 20
+MOTION_MIN_LIVE_FRAMES = 8
 
 
 class LegacyCompatibleLSTM(LSTM):
@@ -46,6 +50,7 @@ class PredictRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     mode: Mode = "static"
     image_data: str = Field(min_length=16)
+    flip_horizontal: bool = True
 
 
 class PredictResponse(BaseModel):
@@ -63,7 +68,7 @@ class PredictResponse(BaseModel):
 
 class ControlRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
-    action: Literal["clear", "backspace", "delete_word", "reset_session"]
+    action: Literal["clear", "backspace", "delete_word", "reset_session", "reset_tracking"]
 
 
 class SessionResponse(BaseModel):
@@ -76,19 +81,33 @@ class SessionState:
     buffer: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     sequence: deque[list[float]] = field(default_factory=lambda: deque(maxlen=30))
     motion_probs: deque[list[float]] = field(default_factory=lambda: deque(maxlen=5))
+    motion_labels: deque[str] = field(
+        default_factory=lambda: deque(maxlen=MOTION_STABLE_FRAMES)
+    )
     sentence: str = ""
     prev_char: str = ""
     last_added_time: float = 0.0
     prev_motion_features: list[float] | None = None
+    live_motion_frames: int = 0
+    hand_present: bool = False
 
-    def clear_all(self) -> None:
-        self.buffer.clear()
+    def clear_motion_tracking(self) -> None:
         self.sequence.clear()
         self.motion_probs.clear()
-        self.sentence = ""
+        self.motion_labels.clear()
+        self.prev_motion_features = None
+        self.live_motion_frames = 0
+        self.hand_present = False
+
+    def clear_tracking(self) -> None:
+        self.buffer.clear()
+        self.clear_motion_tracking()
         self.prev_char = ""
         self.last_added_time = 0.0
-        self.prev_motion_features = None
+
+    def clear_all(self) -> None:
+        self.clear_tracking()
+        self.sentence = ""
 
 
 class HybridPredictor:
@@ -155,7 +174,7 @@ class HybridPredictor:
         return filled
 
     @staticmethod
-    def _decode_image(image_data: str) -> np.ndarray:
+    def _decode_image(image_data: str, flip_horizontal: bool = True) -> np.ndarray:
         payload = image_data.split(",", 1)[1] if "," in image_data else image_data
 
         try:
@@ -169,8 +188,10 @@ class HybridPredictor:
             raise HTTPException(status_code=400, detail="Could not decode image payload")
 
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        # Notebook capture/inference uses a horizontally flipped frame.
-        return cv2.flip(rgb, 1)
+        # The original web/notebook flow sends an unmirrored frame and expects a
+        # selfie-style frame for inference. Mobile Expo captures are already
+        # mirrored when CameraView uses mirror=true, so the client can opt out.
+        return cv2.flip(rgb, 1) if flip_horizontal else rgb
 
     @staticmethod
     def _normalize_feature_length(features: list[float], target_size: int) -> list[float]:
@@ -235,16 +256,13 @@ class HybridPredictor:
 
     def predict(self, request: PredictRequest) -> PredictResponse:
         session = self._get_session(request.session_id)
-        image_rgb = self._decode_image(request.image_data)
+        image_rgb = self._decode_image(request.image_data, request.flip_horizontal)
         features, landmarks = self._predict_features(image_rgb)
 
         if features is None:
+            session.buffer.clear()
             if request.mode == "motion":
-                session.buffer.clear()
-                if session.prev_motion_features is not None:
-                    session.sequence.append(session.prev_motion_features)
-                else:
-                    session.sequence.append([0.0] * self._motion_feature_size)
+                session.clear_motion_tracking()
 
             return PredictResponse(
                 session_id=request.session_id,
@@ -265,9 +283,7 @@ class HybridPredictor:
         added_to_sentence = False
 
         if request.mode == "static":
-            session.sequence.clear()
-            session.motion_probs.clear()
-            session.prev_motion_features = None
+            session.clear_motion_tracking()
             features = self._normalize_feature_length(features, self._static_feature_size)
             raw_prediction = self.static_model.predict([features])[0]
             current_prediction = str(raw_prediction)
@@ -294,10 +310,25 @@ class HybridPredictor:
         else:
             session.buffer.clear()
             features = self._normalize_feature_length(features, self._motion_feature_size)
+
+            if not session.hand_present:
+                session.clear_motion_tracking()
+                session.hand_present = True
+                bootstrap_count = min(
+                    MOTION_BOOTSTRAP_FRAMES,
+                    session.sequence.maxlen - 1,
+                )
+                for _ in range(bootstrap_count):
+                    session.sequence.append(features)
+
             session.prev_motion_features = features
             session.sequence.append(features)
+            session.live_motion_frames += 1
 
-            if len(session.sequence) == session.sequence.maxlen:
+            if (
+                len(session.sequence) == session.sequence.maxlen
+                and session.live_motion_frames >= MOTION_MIN_LIVE_FRAMES
+            ):
                 sequence_np = np.array(session.sequence, dtype=np.float32)
                 prediction_vector = self.motion_model.predict(
                     np.expand_dims(sequence_np, axis=0),
@@ -309,13 +340,23 @@ class HybridPredictor:
                 action_idx = int(np.argmax(smooth_vector))
                 current_prediction = self.actions[action_idx]
                 confidence = float(smooth_vector[action_idx])
+                session.motion_labels.append(current_prediction)
+                is_stable_motion = (
+                    len(session.motion_labels) == session.motion_labels.maxlen
+                    and len(set(session.motion_labels)) == 1
+                )
 
-                if confidence >= 0.55 and (current_time - session.last_added_time) > 1.0:
+                if (
+                    is_stable_motion
+                    and confidence >= MOTION_CONFIDENCE_THRESHOLD
+                    and current_prediction != session.prev_char
+                    and (current_time - session.last_added_time) > 1.0
+                ):
                     if session.sentence and not session.sentence.endswith(" "):
                         session.sentence += " "
                     session.sentence += f"{current_prediction} "
                     session.last_added_time = current_time
-                    session.prev_char = ""
+                    session.prev_char = current_prediction
                     added_to_sentence = True
 
         if len(session.sentence) > 120:
@@ -339,6 +380,8 @@ class HybridPredictor:
 
         if request.action in {"clear", "reset_session"}:
             session.clear_all()
+        elif request.action == "reset_tracking":
+            session.clear_tracking()
         elif request.action == "backspace":
             session.sentence = session.sentence[:-1]
         elif request.action == "delete_word":
@@ -359,6 +402,10 @@ class HybridPredictor:
             "motion_actions_source": self.motion_actions_source,
             "buffer_size": 10,
             "sequence_length": 30,
+            "motion_stable_frames": MOTION_STABLE_FRAMES,
+            "motion_confidence_threshold": MOTION_CONFIDENCE_THRESHOLD,
+            "motion_bootstrap_frames": MOTION_BOOTSTRAP_FRAMES,
+            "motion_min_live_frames": MOTION_MIN_LIVE_FRAMES,
             "cooldown_seconds": 1.0,
         }
 
